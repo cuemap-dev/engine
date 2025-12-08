@@ -74,7 +74,7 @@ pub fn routes(engine: std::sync::Arc<CueMapEngine>, multi_tenant: bool) -> Route
 async fn root() -> impl IntoResponse {
     Json(serde_json::json!({
         "name": "CueMap Rust Engine",
-        "version": "0.1.0",
+        "version": "0.2.1",
         "description": "High-performance Temporal-Associative Memory Store"
     }))
 }
