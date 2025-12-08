@@ -81,7 +81,7 @@ Validated on 120+ test scenarios:
 
 Stress tested with 400+ parallel operations:
 - ✅ **100% success rate** under concurrent load
-- ✅ **100%+ recall accuracy** with parallel reads/writes
+- ✅ **100% recall accuracy** with parallel reads/writes
 - ✅ **Lock-free operations** with DashMap
 
 ## Architecture
