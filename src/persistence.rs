@@ -111,7 +111,8 @@ impl PersistenceManager {
             .map(|entry| {
                 let cue = entry.key().clone();
                 let ordered_set = entry.value();
-                let memory_ids = ordered_set.get_recent(None); // Get all items
+                // Use owned version for serialization
+                let memory_ids = ordered_set.get_recent_owned(None);
                 (cue, memory_ids)
             })
             .collect();

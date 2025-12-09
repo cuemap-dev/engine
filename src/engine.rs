@@ -178,12 +178,14 @@ impl CueMapEngine {
         
         for cue in cues {
             if let Some(ordered_set) = self.cue_index.get(cue) {
+                // Use zero-copy references
                 let memories = ordered_set.get_recent(Some(end));
                 
                 // Only iterate over the range we care about
+                // Clone only when inserting into HashMap (unavoidable)
                 for (idx, memory_id) in memories.iter().enumerate().skip(start).take(end - start) {
                     candidates
-                        .entry(memory_id.clone())
+                        .entry((*memory_id).clone())
                         .or_insert_with(Vec::new)
                         .push(idx);
                 }

@@ -46,7 +46,11 @@ impl Memory {
 /// - O(1) removal by value (via shift_remove)
 /// - O(1) lookup
 /// - Maintains insertion order
-#[derive(Debug, Clone, Default)]
+/// 
+/// TODO: Optimize storage by interning UUID strings to u64 integers for V2.
+/// This would reduce memory overhead from ~5M string copies to ~5M u64s (8 bytes each)
+/// for a 1M memory dataset with 5 cues per memory.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OrderedSet {
     items: IndexSet<String>,
 }
@@ -77,7 +81,19 @@ impl OrderedSet {
     }
     
     /// Get items in reverse order (most recent first) - O(min(n, limit))
-    pub fn get_recent(&self, limit: Option<usize>) -> Vec<String> {
+    /// Returns references to avoid cloning strings (zero-copy)
+    pub fn get_recent(&self, limit: Option<usize>) -> Vec<&String> {
+        let iter = self.items.iter().rev();
+        
+        match limit {
+            Some(lim) => iter.take(lim).collect(),
+            None => iter.collect(),
+        }
+    }
+    
+    /// Get items as owned strings (for serialization)
+    /// Only use when you need to own the strings
+    pub fn get_recent_owned(&self, limit: Option<usize>) -> Vec<String> {
         let iter = self.items.iter().rev();
         
         match limit {
