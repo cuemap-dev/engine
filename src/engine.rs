@@ -1,7 +1,7 @@
 use crate::config::*;
 use crate::structures::{Memory, OrderedSet};
 use dashmap::DashMap;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -102,6 +102,16 @@ impl CueMapEngine {
         limit: usize,
         auto_reinforce: bool,
     ) -> Vec<RecallResult> {
+        self.recall_with_min_intersection(query_cues, limit, auto_reinforce, None)
+    }
+    
+    pub fn recall_with_min_intersection(
+        &self,
+        query_cues: Vec<String>,
+        limit: usize,
+        auto_reinforce: bool,
+        min_intersection: Option<usize>,
+    ) -> Vec<RecallResult> {
         if query_cues.is_empty() {
             return Vec::new();
         }
@@ -118,7 +128,12 @@ impl CueMapEngine {
         }
         
         // Iterative deepening search
-        let results = self.iterative_search(&cues, limit);
+        let mut results = self.iterative_search(&cues, limit);
+        
+        // Filter by minimum intersection if specified
+        if let Some(min_int) = min_intersection {
+            results.retain(|r| r.intersection_count >= min_int);
+        }
         
         // Auto-reinforce if enabled
         if auto_reinforce {

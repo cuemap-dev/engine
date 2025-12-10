@@ -1,12 +1,15 @@
+use crate::auth::AuthConfig;
 use crate::engine::CueMapEngine;
 use crate::multi_tenant::{MultiTenantEngine, validate_project_id};
 use axum::{
     extract::{Path, State},
     http::{StatusCode, HeaderMap},
+    middleware,
     response::IntoResponse,
     routing::{get, patch, post, delete},
     Json, Router,
 };
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,6 +35,10 @@ pub struct RecallRequest {
     limit: usize,
     #[serde(default)]
     auto_reinforce: bool,
+    #[serde(default)]
+    projects: Option<Vec<String>>,
+    #[serde(default)]
+    min_intersection: Option<usize>,
 }
 
 fn default_limit() -> usize {
@@ -42,6 +49,8 @@ fn default_limit() -> usize {
 pub struct ReinforceRequest {
     cues: Vec<String>,
 }
+
+
 
 #[derive(Debug, Serialize)]
 pub struct ReinforceResponse {
@@ -55,29 +64,44 @@ pub enum EngineState {
     MultiTenant(Arc<MultiTenantEngine>),
 }
 
-pub fn routes(engine: std::sync::Arc<CueMapEngine>, multi_tenant: bool) -> Router {
-    if multi_tenant {
-        let mt_engine = Arc::new(MultiTenantEngine::new());
-        Router::new()
-            .route("/", get(root))
-            .route("/memories", post(add_memory_mt))
-            .route("/recall", post(recall_mt))
-            .route("/memories/:id/reinforce", patch(reinforce_memory_mt))
-            .route("/memories/:id", get(get_memory_mt))
-            .route("/stats", get(get_stats_mt))
-            .route("/projects", get(list_projects))
-            .route("/projects/:id", delete(delete_project))
-            .with_state(EngineState::MultiTenant(mt_engine))
-    } else {
-        Router::new()
-            .route("/", get(root))
-            .route("/memories", post(add_memory))
-            .route("/recall", post(recall))
-            .route("/memories/:id/reinforce", patch(reinforce_memory))
-            .route("/memories/:id", get(get_memory))
-            .route("/stats", get(get_stats))
-            .with_state(EngineState::SingleTenant(CueMapEngine::clone(&engine)))
+/// Routes for single-tenant mode
+pub fn routes(engine: std::sync::Arc<CueMapEngine>, auth_config: AuthConfig) -> Router {
+    let mut router = Router::new()
+        .route("/", get(root))
+        .route("/memories", post(add_memory))
+        .route("/recall", post(recall))
+        .route("/memories/:id/reinforce", patch(reinforce_memory))
+        .route("/memories/:id", get(get_memory))
+        .route("/stats", get(get_stats))
+        .with_state(EngineState::SingleTenant(CueMapEngine::clone(&engine)));
+    
+    // Add auth middleware if enabled
+    if auth_config.is_enabled() {
+        router = router.layer(middleware::from_fn_with_state(auth_config, crate::auth::auth_middleware));
     }
+    
+    router
+}
+
+/// Routes for multi-tenant mode
+pub fn routes_with_mt_engine(mt_engine: Arc<MultiTenantEngine>, auth_config: AuthConfig) -> Router {
+    let mut router = Router::new()
+        .route("/", get(root))
+        .route("/memories", post(add_memory_mt))
+        .route("/recall", post(recall_mt))
+        .route("/memories/:id/reinforce", patch(reinforce_memory_mt))
+        .route("/memories/:id", get(get_memory_mt))
+        .route("/stats", get(get_stats_mt))
+        .route("/projects", get(list_projects))
+        .route("/projects/:id", delete(delete_project))
+        .with_state(EngineState::MultiTenant(mt_engine));
+    
+    // Add auth middleware if enabled
+    if auth_config.is_enabled() {
+        router = router.layer(middleware::from_fn_with_state(auth_config, crate::auth::auth_middleware));
+    }
+    
+    router
 }
 
 async fn root() -> impl IntoResponse {
@@ -229,8 +253,15 @@ async fn add_memory_mt(
     };
     
     if let EngineState::MultiTenant(mt_engine) = state {
-        let engine = mt_engine.get_or_create_project(project_id);
-        let memory_id = engine.add_memory(req.content, req.cues, req.metadata);
+        let engine = mt_engine.get_or_create_project(project_id.clone());
+        let memory_id = engine.add_memory(req.content.clone(), req.cues.clone(), req.metadata);
+        
+        tracing::info!(
+            "POST /memories project={} cues={} id={}",
+            project_id,
+            req.cues.len(),
+            memory_id
+        );
         
         (
             StatusCode::OK,
@@ -255,16 +286,95 @@ async fn recall_mt(
     headers: HeaderMap,
     Json(req): Json<RecallRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let project_id = match extract_project_id(&headers) {
-        Ok(id) => id,
-        Err(e) => return e,
-    };
+    use std::time::Instant;
     
     if let EngineState::MultiTenant(mt_engine) = state {
-        let engine = mt_engine.get_or_create_project(project_id);
-        let results = engine.recall(req.cues, req.limit, req.auto_reinforce);
+        // Cross-domain query if projects array is provided
+        if let Some(projects) = req.projects {
+            let start = Instant::now();
+            
+            // Query all projects in parallel using rayon
+            let all_results: Vec<serde_json::Value> = projects
+                .par_iter()
+                .map(|project_id| {
+                    let engine = mt_engine.get_or_create_project(project_id.clone());
+                    let results = engine.recall_with_min_intersection(
+                        req.cues.clone(), 
+                        req.limit, 
+                        false,
+                        req.min_intersection
+                    );
+                    
+                    let json_results: Vec<serde_json::Value> = results
+                        .into_iter()
+                        .map(|r| serde_json::json!({
+                            "id": r.memory_id,
+                            "content": r.content,
+                            "score": r.score,
+                            "intersection_count": r.intersection_count,
+                            "recency_score": r.recency_score,
+                            "metadata": r.metadata
+                        }))
+                        .collect();
+                    
+                    serde_json::json!({
+                        "project_id": project_id,
+                        "results": json_results
+                    })
+                })
+                .collect();
+            
+            let elapsed = start.elapsed();
+            let total_results: usize = all_results.iter()
+                .filter_map(|r| r.get("results").and_then(|res| res.as_array().map(|a| a.len())))
+                .sum();
+            
+            let engine_latency_ms = elapsed.as_secs_f64() * 1000.0;
+            
+            tracing::info!(
+                "POST /recall cross-domain projects={} cues={} results={} latency={:.2}ms",
+                projects.len(),
+                req.cues.len(),
+                total_results,
+                engine_latency_ms
+            );
+            
+            return (StatusCode::OK, Json(serde_json::json!({ 
+                "results": all_results,
+                "engine_latency": engine_latency_ms
+            })));
+        }
         
-        (StatusCode::OK, Json(serde_json::json!({ "results": results })))
+        // Single project query using X-Project-ID header
+        let project_id = match extract_project_id(&headers) {
+            Ok(id) => id,
+            Err(e) => return e,
+        };
+        
+        let start = Instant::now();
+        let engine = mt_engine.get_or_create_project(project_id.clone());
+        let results = engine.recall_with_min_intersection(
+            req.cues.clone(), 
+            req.limit, 
+            req.auto_reinforce,
+            req.min_intersection
+        );
+        let elapsed = start.elapsed();
+        
+        let engine_latency_ms = elapsed.as_secs_f64() * 1000.0;
+        
+        tracing::info!(
+            "POST /recall project={} cues={} results={} latency={:.2}ms",
+            project_id,
+            req.cues.len(),
+            results.len(),
+            engine_latency_ms
+        );
+        
+        (StatusCode::OK, Json(serde_json::json!({ 
+            "results": results,
+            "engine_latency": engine_latency_ms
+        })))
     } else {
         (
             StatusCode::INTERNAL_SERVER_ERROR,

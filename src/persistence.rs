@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::interval;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PersistedState {
@@ -40,6 +40,134 @@ impl PersistenceManager {
             data_dir,
             snapshot_interval: Duration::from_secs(snapshot_interval_secs),
         }
+    }
+    
+    /// Save engine state to a specific path (used by multi-tenant)
+    pub fn save_to_path(
+        engine: &CueMapEngine,
+        path: &Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let start = std::time::Instant::now();
+        
+        let memories = engine.get_memories();
+        let cue_index = engine.get_cue_index();
+        
+        // Convert DashMaps to serializable format
+        let memories_map: HashMap<String, Memory> = memories
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+        
+        let cue_index_map: HashMap<String, Vec<String>> = cue_index
+            .iter()
+            .map(|entry| {
+                let cue = entry.key().clone();
+                let ordered_set = entry.value();
+                let memory_ids = ordered_set.get_recent_owned(None);
+                (cue, memory_ids)
+            })
+            .collect();
+        
+        let state = PersistedState {
+            memories: memories_map,
+            cue_index: cue_index_map,
+            version: PERSISTENCE_VERSION,
+            saved_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        };
+        
+        // Serialize to bincode
+        let data = bincode::serialize(&state)?;
+        
+        // Write to temp file first (atomic operation)
+        let temp_path = path.with_extension("bin.tmp");
+        fs::write(&temp_path, &data)?;
+        
+        // Rename to final location (atomic on most filesystems)
+        fs::rename(&temp_path, path)?;
+        
+        let duration = start.elapsed();
+        info!(
+            "Saved {} memories and {} cues to {:?} in {:?} ({} bytes)",
+            state.memories.len(),
+            state.cue_index.len(),
+            path,
+            duration,
+            data.len()
+        );
+        
+        Ok(())
+    }
+    
+    /// Load engine state from a specific path (used by multi-tenant)
+    pub fn load_from_path(
+        path: &Path,
+    ) -> Result<(DashMap<String, Memory>, DashMap<String, OrderedSet>), Box<dyn std::error::Error>> {
+        if !path.exists() {
+            return Err(format!("Snapshot not found: {:?}", path).into());
+        }
+        
+        info!("Loading state from {:?}", path);
+        
+        let data = fs::read(path)?;
+        let state: PersistedState = bincode::deserialize(&data)?;
+        
+        info!(
+            "Loaded {} memories and {} cues from snapshot (version: {}, saved: {})",
+            state.memories.len(),
+            state.cue_index.len(),
+            state.version,
+            state.saved_at
+        );
+        
+        // Convert to DashMaps
+        let memories = DashMap::new();
+        for (id, memory) in state.memories {
+            memories.insert(id, memory);
+        }
+        
+        let cue_index = DashMap::new();
+        for (cue, memory_ids) in state.cue_index {
+            let mut ordered_set = OrderedSet::new();
+            for memory_id in memory_ids {
+                ordered_set.add(memory_id);
+            }
+            cue_index.insert(cue, ordered_set);
+        }
+        
+        Ok((memories, cue_index))
+    }
+    
+    /// List all snapshot files in a directory
+    pub fn list_snapshots_in_dir(dir: &Path) -> Vec<String> {
+        let mut snapshots = Vec::new();
+        
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                    if filename.ends_with(".bin") && !filename.ends_with(".tmp") {
+                        let project_id = filename.replace(".bin", "");
+                        snapshots.push(project_id);
+                    }
+                }
+            }
+        }
+        
+        snapshots.sort();
+        snapshots
+    }
+    
+    /// Delete a snapshot file
+    #[allow(dead_code)]
+    pub fn delete_snapshot(path: &Path) -> Result<(), String> {
+        if path.exists() {
+            fs::remove_file(path)
+                .map_err(|e| format!("Failed to delete snapshot: {}", e))?;
+        }
+        Ok(())
     }
     
     fn snapshot_path(&self) -> PathBuf {

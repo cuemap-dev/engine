@@ -1,19 +1,19 @@
 //! Authentication middleware for API key validation.
 
 use axum::{
-    extract::Request,
+    extract::{Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use std::collections::HashSet;
 use std::env;
-use tracing::{debug, warn};
+use tracing::info;
 
 #[derive(Clone)]
 pub struct AuthConfig {
-    pub api_keys: HashSet<String>,
-    pub require_auth: bool,
+    api_keys: HashSet<String>,
+    require_auth: bool,
 }
 
 impl AuthConfig {
@@ -38,12 +38,12 @@ impl AuthConfig {
             }
         }
         
-        let require_auth = !api_keys.is_empty() || env::var("CUEMAP_REQUIRE_AUTH").is_ok();
+        let require_auth = !api_keys.is_empty();
         
         if require_auth {
-            println!("🔐 Authentication enabled ({} API keys configured)", api_keys.len());
+            info!("Authentication enabled ({} API keys configured)", api_keys.len());
         } else {
-            println!("⚠️  Authentication disabled (no API keys configured)");
+            info!("Authentication disabled (no API keys configured)");
         }
         
         Self {
@@ -52,11 +52,51 @@ impl AuthConfig {
         }
     }
     
-    pub fn validate_key(&self, key: &str) -> bool {
+    pub fn is_enabled(&self) -> bool {
+        self.require_auth
+    }
+    
+    fn validate_key(&self, key: &str) -> bool {
         if !self.require_auth {
             return true;
         }
         
         self.api_keys.contains(key)
+    }
+}
+
+/// Middleware to validate API keys
+pub async fn auth_middleware(
+    State(auth_config): State<AuthConfig>,
+    headers: HeaderMap,
+    request: Request,
+    next: Next,
+) -> Result<Response, impl IntoResponse> {
+    // Skip auth if not required
+    if !auth_config.require_auth {
+        return Ok(next.run(request).await);
+    }
+    
+    // Extract API key from header
+    let api_key = headers
+        .get("X-API-Key")
+        .and_then(|v| v.to_str().ok());
+    
+    match api_key {
+        Some(key) if auth_config.validate_key(key) => {
+            Ok(next.run(request).await)
+        }
+        Some(_) => {
+            Err((
+                StatusCode::UNAUTHORIZED,
+                "Invalid API key"
+            ))
+        }
+        None => {
+            Err((
+                StatusCode::UNAUTHORIZED,
+                "Missing X-API-Key header"
+            ))
+        }
     }
 }

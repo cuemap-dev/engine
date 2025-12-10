@@ -11,5 +11,7 @@ pub const MAX_SEARCH_DEPTH: usize = 1000;
 pub const DASHMAP_SHARD_COUNT: usize = 128;
 
 // Pre-allocation hints
+#[allow(dead_code)]
 pub const EXPECTED_CUES_PER_MEMORY: usize = 4;
+#[allow(dead_code)]
 pub const EXPECTED_MEMORIES_PER_CUE: usize = 100;

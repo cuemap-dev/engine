@@ -43,6 +43,130 @@ Options:
   -m, --multi-tenant                   Enable multi-tenancy
 ```
 
+## Multi-Tenant Mode with Persistence
+
+Multi-tenant mode provides complete project isolation with automatic persistence:
+
+### Features
+
+- **Project Isolation**: Each project has its own memory space
+- **Auto-Save on Shutdown**: All projects saved when server stops (Ctrl+C)
+- **Auto-Load on Startup**: All snapshots restored when server starts
+- **Zero Configuration**: Works out of the box
+
+### Usage
+
+```bash
+# Start in multi-tenant mode
+./target/release/cuemap-rust --port 8080 --multi-tenant
+```
+
+### Example
+
+```bash
+# Add memory to project
+curl -X POST http://localhost:8080/memories \
+  -H "X-Project-ID: my-project" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Important data", "cues": ["test"]}'
+
+# Stop server (Ctrl+C) - auto-saves all projects
+# Restart server - auto-loads all projects
+
+# Data persists across restarts!
+```
+
+### Snapshot Management
+
+Snapshots are automatically managed:
+- **Created**: On graceful shutdown (SIGINT/Ctrl+C)
+- **Loaded**: On server startup
+- **Location**: `./data/snapshots/` (configurable via `--data-dir`)
+- **Format**: Bincode binary (same as single-tenant mode)
+- **Files**: `{project-id}.bin` (one file per project)
+
+Test persistence:
+```bash
+./test_persistence.sh
+```
+
+## Authentication
+
+Secure your CueMap instance with API key authentication.
+
+### Enable Authentication
+
+Set an API key via environment variable:
+
+```bash
+# Single API key
+CUEMAP_API_KEY=your-secret-key ./target/release/cuemap-rust --port 8080
+
+# Multiple API keys (comma-separated)
+CUEMAP_API_KEYS=key1,key2,key3 ./target/release/cuemap-rust --port 8080
+```
+
+### Using Authentication
+
+Include the API key in the `X-API-Key` header:
+
+```bash
+# Without auth (fails if enabled)
+curl http://localhost:8080/stats
+# Response: Missing X-API-Key header
+
+# With correct key
+curl -H "X-API-Key: your-secret-key" http://localhost:8080/stats
+# Response: {"total_memories": 1000, ...}
+
+# With wrong key
+curl -H "X-API-Key: wrong-key" http://localhost:8080/stats
+# Response: Invalid API key
+```
+
+### SDK Usage
+
+Python:
+```python
+from cuemap import CueMap
+
+# With authentication
+client = CueMap(
+    url="http://localhost:8080",
+    api_key="your-secret-key"
+)
+
+client.add("Memory", cues=["test"])
+```
+
+TypeScript:
+```typescript
+import CueMap from 'cuemap';
+
+const client = new CueMap({
+  url: 'http://localhost:8080',
+  apiKey: 'your-secret-key'
+});
+
+await client.add('Memory', ['test']);
+```
+
+### Docker with Authentication
+
+```bash
+docker run -p 8080:8080 \
+  -e CUEMAP_API_KEY=your-secret-key \
+  cuemap/engine
+```
+
+### Security Notes
+
+- Authentication is **disabled by default** (no keys = no auth required)
+- Keys are loaded from environment variables only
+- Use strong, randomly generated keys in production
+- Rotate keys regularly
+- Use HTTPS in production to protect keys in transit
+
 ## Performance
 
 ### Benchmark Results
