@@ -12,6 +12,7 @@ pub struct RecallResult {
     pub score: f64,
     pub intersection_count: usize,
     pub recency_score: f64,
+    pub reinforcement_score: f64,
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
@@ -187,14 +188,15 @@ impl CueMapEngine {
         cues: &[String],
         start: usize,
         end: usize,
-    ) -> HashMap<String, Vec<usize>> {
+    ) -> HashMap<String, Vec<(usize, usize)>> {
         // Pre-allocate with estimated capacity
-        let mut candidates: HashMap<String, Vec<usize>> = HashMap::with_capacity(end - start);
+        let mut candidates: HashMap<String, Vec<(usize, usize)>> = HashMap::with_capacity(end - start);
         
         for cue in cues {
             if let Some(ordered_set) = self.cue_index.get(cue) {
                 // Use zero-copy references
                 let memories = ordered_set.get_recent(Some(end));
+                let list_len = ordered_set.len();
                 
                 // Only iterate over the range we care about
                 // Clone only when inserting into HashMap (unavoidable)
@@ -202,7 +204,7 @@ impl CueMapEngine {
                     candidates
                         .entry((*memory_id).clone())
                         .or_insert_with(Vec::new)
-                        .push(idx);
+                        .push((idx, list_len));
                 }
             }
         }
@@ -210,24 +212,71 @@ impl CueMapEngine {
         candidates
     }
     
-    fn score_candidates(&self, candidates: HashMap<String, Vec<usize>>) -> Vec<RecallResult> {
+    fn score_candidates(&self, candidates: HashMap<String, Vec<(usize, usize)>>) -> Vec<RecallResult> {
+        // Constants for continuous gradient weighting
+        const MAX_REC_WEIGHT: f64 = 20.0;
+        const MAX_FREQ_WEIGHT: f64 = 5.0;
+        
         // Pre-allocate result vector
         let mut results = Vec::with_capacity(candidates.len());
         
-        for (memory_id, positions) in candidates {
+        for (memory_id, positions_with_len) in candidates {
             if let Some(memory) = self.memories.get(&memory_id) {
-                let intersection_count = positions.len();
+                let intersection_count = positions_with_len.len();
                 
-                // Recency score: average of inverted positions (optimized)
-                let pos_len = positions.len() as f64;
-                let recency_score: f64 = positions
-                    .iter()
-                    .map(|&p| 1.0 / (p as f64 + 1.0))
-                    .sum::<f64>()
-                    / pos_len;
+                // Calculate weighted recency and find best position for gradient calculation
+                let mut total_recency = 0.0;
+                let mut total_w_rec = 0.0;
+                let mut total_w_freq = 0.0;
                 
-                // Combined score
-                let score = (intersection_count as f64 * 10.0) + recency_score;
+                for &(pos, list_len) in &positions_with_len {
+                    let pos_f64 = pos as f64;
+                    let list_len_f64 = list_len as f64;
+                    
+                    // Calculate sigma (characteristic scale)
+                    let sigma = list_len_f64.sqrt();
+                    
+                    // Calculate ratio (normalized depth)
+                    let ratio = pos_f64 / sigma;
+                    
+                    // Dynamic weights using continuous gradient
+                    // Recency weight: decays as depth increases
+                    let w_rec = MAX_REC_WEIGHT / (ratio + 1.0);
+                    
+                    // Frequency weight: grows as depth increases
+                    let w_freq = 1.0 + (MAX_FREQ_WEIGHT * (1.0 - (1.0 / (ratio + 1.0))));
+                    
+                    // Calculate recency component
+                    let mut recency_component = 1.0 / (pos_f64 + 1.0);
+                    
+                    // Freshness boost for position 0
+                    if pos == 0 {
+                        recency_component += 1.0;
+                    }
+                    
+                    total_recency += recency_component;
+                    total_w_rec += w_rec;
+                    total_w_freq += w_freq;
+                }
+                
+                // Average the scores and weights across all positions
+                let count = positions_with_len.len() as f64;
+                let recency_score = total_recency / count;
+                let avg_w_rec = total_w_rec / count;
+                let avg_w_freq = total_w_freq / count;
+                
+                // Calculate frequency score using log10
+                let frequency_score = if memory.reinforcement_count > 0 {
+                    (memory.reinforcement_count as f64).log10()
+                } else {
+                    0.0
+                };
+                
+                // Calculate intersection score
+                let intersection_score = (intersection_count as f64) * 100.0;
+                
+                // Final score calculation with averaged weights
+                let score = intersection_score + (recency_score * avg_w_rec) + (frequency_score * avg_w_freq);
                 
                 results.push(RecallResult {
                     memory_id: memory_id.clone(),
@@ -235,6 +284,7 @@ impl CueMapEngine {
                     score,
                     intersection_count,
                     recency_score,
+                    reinforcement_score: frequency_score,
                     metadata: memory.metadata.clone(),
                 });
             }

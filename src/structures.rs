@@ -11,6 +11,8 @@ pub struct Memory {
     pub created_at: f64,
     pub last_accessed: f64,
     #[serde(default)]
+    pub reinforcement_count: u64,
+    #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
@@ -26,6 +28,7 @@ impl Memory {
             content,
             created_at: now,
             last_accessed: now,
+            reinforcement_count: 0,
             metadata: metadata.unwrap_or_default(),
         }
     }
@@ -35,6 +38,7 @@ impl Memory {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs_f64();
+        self.reinforcement_count += 1;
     }
 }
 
