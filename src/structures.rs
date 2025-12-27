@@ -13,6 +13,8 @@ pub struct Memory {
     #[serde(default)]
     pub reinforcement_count: u64,
     #[serde(default)]
+    pub cues: Vec<String>,
+    #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
@@ -29,6 +31,7 @@ impl Memory {
             created_at: now,
             last_accessed: now,
             reinforcement_count: 0,
+            cues: Vec::new(),
             metadata: metadata.unwrap_or_default(),
         }
     }
@@ -56,7 +59,7 @@ impl Memory {
 /// for a 1M memory dataset with 5 cues per memory.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OrderedSet {
-    items: IndexSet<String>,
+    pub items: IndexSet<String>,
 }
 
 impl OrderedSet {
@@ -73,6 +76,11 @@ impl OrderedSet {
         // insert is O(1) amortized
         self.items.shift_remove(&item);
         self.items.insert(item);
+    }
+
+    /// Remove item from set - O(1) amortized
+    pub fn remove(&mut self, item: &str) -> bool {
+        self.items.shift_remove(item)
     }
     
     /// Move item to end (most recent position) - O(1) amortized
@@ -104,6 +112,12 @@ impl OrderedSet {
             Some(lim) => iter.take(lim).cloned().collect(),
             None => iter.cloned().collect(),
         }
+    }
+
+    /// Get the index of an item in the set - O(1)
+    /// Note: Returns index in insertion order (oldest -> newest)
+    pub fn get_index_of(&self, item: &str) -> Option<usize> {
+        self.items.get_index_of(item)
     }
     
     #[allow(dead_code)]
