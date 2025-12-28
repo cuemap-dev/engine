@@ -604,7 +604,7 @@ graph LR
         J1[TrainLexicon]
         J2[LlmProposeCues]
         J3[ProposeAliases]
-        J4[Ingest & Verify (Agent)]
+        J4["Ingest & Verify (Agent)"]
     end
     
     subgraph "Job Queue"
