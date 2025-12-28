@@ -306,6 +306,7 @@ curl -X POST http://localhost:8080/memories \
 ```
 
 **Configuration**:
+- `LLM_ENABLED=true` (Set to `false` to disable all background LLM jobs for low-end machines)
 - `LLM_PROVIDER=ollama` (default, no env var needed)
 - `LLM_MODEL=mistral` (default)
 - `OLLAMA_URL=http://localhost:11434` (default)
@@ -544,7 +545,7 @@ sequenceDiagram
     par Background Processing
         API->>Jobs: Enqueue TrainLexicon
         API->>Jobs: Enqueue LlmProposeCues
-        Note over Main: 🌀 Systems Consolidation check
+        Note over Main: Systems Consolidation check
     end
     
     Note over Jobs,LLM: ⏳ Asynchronous intelligence

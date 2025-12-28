@@ -116,7 +116,12 @@ pub mod setup {
 static CLIENT: OnceLock<Client> = OnceLock::new();
 
 fn get_client() -> &'static Client {
-    CLIENT.get_or_init(Client::new)
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| Client::new())
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,6 +134,14 @@ pub struct LlmConfig {
 
 impl LlmConfig {
     pub fn from_env() -> Option<Self> {
+        let enabled = env::var("LLM_ENABLED")
+            .map(|v| v.to_lowercase() != "false")
+            .unwrap_or(true);
+            
+        if !enabled {
+            return None;
+        }
+
         // Default to Ollama (local, no API key required)
         let provider = env::var("LLM_PROVIDER").unwrap_or_else(|_| "ollama".to_string());
         
