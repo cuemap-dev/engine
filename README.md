@@ -18,19 +18,19 @@ Built with Rust for maximum performance and reliability.
 
 CueMap v0.5 introduces deep biological inspiration into the deterministic recall engine:
 
-### 🧠 Hippocampal Pattern Completion
+### Hippocampal Pattern Completion
 Given partial cues, the engine recalls the whole memory by maintaining an incremental cue co-occurrence matrix. This expansion happens strictly at retrieval-time and can be toggled off via `disable_pattern_completion: true` for pure deterministic matching.
 
-### ⏱️ Temporal Episode Chunking
+### Temporal Episode Chunking
 Experiences are automatically chunked into episodes. Memories created in close temporal proximity with high cue overlap are tagged with `episode:<id>`, allowing the engine to recall entire "storylines" from a single member. Can be disabled per-request via `disable_temporal_chunking: true`.
 
-### 💎 Salience Bias (Amygdala)
+### Salience Bias (Amygdala)
 Not all memories are created equal. The engine calculates a **Salience Multiplier** based on cue density, reinforcement frequency, and rare cue combinations. Salient memories persist longer in the "warm" cache and rank higher than routine events. Can be disabled per-recall via `disable_salience_bias: true`.
 
-### 📉 Systems Consolidation
+### Systems Consolidation
 Old, highly overlapping memories are periodically merged into summarized "gist" memories. This process is strictly additive: it keeps the original high-resolution memories intact as Ground Truth while creating new consolidated summaries to aid high-level recall. Can be toggled at retrieval via `disable_systems_consolidation: true`.
 
-### 🎯 Match Integrity
+### Match Integrity
 Every recall result now includes a **Match Integrity** score. This internal diagnostic combines intersection strength, reinforcement history, and context agreement to tell you how structurally reliable a specific recall result is.
 
 ## Quick Start
@@ -460,17 +460,18 @@ curl -X POST http://localhost:8080/recall/grounded \
 
 ```mermaid
 graph TB
-    subgraph "Client Layer"
+    subgraph "Ingestion & Integration"
         CLIENT[Client APIs/SDKs]
+        AGENT[Self-Learning Agent<br/>FS Watcher + Chunker]
     end
     
-    subgraph "API Layer"
+    subgraph "API & Security"
         API[Axum HTTP Server]
         AUTH[Authentication]
     end
     
-    subgraph "Core Engines"
-        MAIN[Main Engine<br/>Memories + Cue Index]
+    subgraph "Core Engines (v0.5 Brain-Inspired)"
+        MAIN[Main Engine<br/>Patterns + Salience + Consolidation]
         LEXICON[Lexicon Engine<br/>Token → Cue Mapping]
         ALIASES[Alias Engine<br/>Synonym Definitions]
     end
@@ -486,10 +487,10 @@ graph TB
         PERSIST[Persistence Layer<br/>Bincode Snapshots]
     end
     
-    CLIENT -->|HTTP Requests| AUTH
+    CLIENT -->|HTTP| AUTH
+    AGENT -->|Job: ExtractAndIngest| JOBS
     AUTH -->|Validated| API
-    API -->|Write| MAIN
-    API -->|Query| MAIN
+    API -->|Write/Query| MAIN
     API -->|Enqueue Jobs| JOBS
     
     MAIN -.->|Auto-save| PERSIST
@@ -510,6 +511,7 @@ graph TB
     style LEXICON fill:#2196F3
     style ALIASES fill:#FF9800
     style JOBS fill:#9C27B0
+    style AGENT fill:#E91E63
 ```
 
 ### Write Flow (Add Memory)
@@ -533,7 +535,7 @@ sequenceDiagram
     API->>Tax: Validate cues
     Tax-->>API: {accepted, rejected}
     
-    API->>Main: Add memory<br/>(content + accepted cues)
+    API->>Main: Add memory<br/>(Temporal Chunking Applied)
     Main-->>API: memory_id
     
     API-->>Client: 200 OK {id, status}
@@ -542,6 +544,7 @@ sequenceDiagram
     par Background Processing
         API->>Jobs: Enqueue TrainLexicon
         API->>Jobs: Enqueue LlmProposeCues
+        Note over Main: 🌀 Systems Consolidation check
     end
     
     Note over Jobs,LLM: ⏳ Asynchronous intelligence
@@ -570,23 +573,22 @@ sequenceDiagram
     Client->>API: POST /recall<br/>{query_text?, cues?, explain?}
     
     alt Natural Language Query
-        API->>Lex: Resolve "payment timeout"
+        API->>Lex: Resolve tokens to cues
         Lex-->>API: ["service:payment", "error:timeout"]
     end
     
-    API->>API: Normalize cues
+    API->>API: Normalize & Deduplicate
     
     API->>Alias: Expand cues with aliases
-    Note over Alias: "pay" → [(pay, 1.0), (service:payment, 0.85)]
     Alias-->>API: Weighted cue list
     
-    API->>Main: Recall weighted
+    API->>Main: Recall weighted (Salience Bias applied)
     
-    Main->>Main: 1. Gather candidates<br/>(intersection + position)
-    Main->>Main: 2. Score candidates<br/>(weighted intersection + recency + frequency)
-    Main->>Main: 3. Sort by score<br/>(exact matches rank higher)
+    Main->>Main: 1. Gather candidates (Selective Set Intersection)
+    Main->>Main: 2. Pattern Completion (Hippocampal CA3 expansion)
+    Main->>Main: 3. Final Scoring (Intersection + Recency + Reinforcement)
     
-    Main-->>API: Scored results + explain?
+    Main-->>API: Scored results + Match Integrity + Explain?
     
     API-->>Client: {results, explain, engine_latency}
     
@@ -597,35 +599,39 @@ sequenceDiagram
 
 ```mermaid
 graph LR
-    subgraph "Job Types"
+    subgraph "Manual & Event Triggers"
         J1[TrainLexicon]
         J2[LlmProposeCues]
         J3[ProposeAliases]
+        J4[Ingest & Verify (Agent)]
     end
     
     subgraph "Job Queue"
         Q[MPSC Channel<br/>1000 capacity]
     end
     
-    subgraph "Processing"
-        W[Async Worker]
+    subgraph "Worker Logic"
+        W[Async Worker Task]
     end
     
-    subgraph "Outcomes"
-        O1[Lexicon Updated<br/>Token → Cue]
-        O2[Cues Attached<br/>Memory Enriched]
-        O3[Aliases Proposed<br/>Synonym Discovery]
+    subgraph "Engine Side-Effects"
+        O1[Lexicon Updated]
+        O2[Cues Attached]
+        O3[Aliases Proposed]
+        O4[Prune Stale Memories]
     end
     
     J1 -->|Enqueue| Q
     J2 -->|Enqueue| Q
     J3 -->|Enqueue| Q
+    J4 -->|Enqueue| Q
     
     Q -->|Dequeue| W
     
     W -->|Execute| O1
     W -->|Execute| O2
     W -->|Execute| O3
+    W -->|Execute| O4
     
     O1 -.->|Used in| NL[NL Query Resolution]
     O2 -.->|Improves| REC[Recall Accuracy]
@@ -636,6 +642,7 @@ graph LR
     style O1 fill:#2196F3
     style O2 fill:#4CAF50
     style O3 fill:#FF9800
+    style O4 fill:#F44336
 ```
 
 ## Advanced Capabilities
@@ -772,7 +779,7 @@ By making the Lexicon itself a CueMapEngine, ambiguous words automatically resol
 ```
 Example: The word "run" has multiple meanings
 
-📥 Your System (DevOps focused):
+Your System (DevOps focused):
 Memory 1: "Pipeline run failed on deployment stage"
          cues: ["ci:pipeline", "status:failed"]
 
@@ -782,7 +789,7 @@ Memory 2: "Container run terminated unexpectedly"
 Memory 3: "Cron job run completed successfully"
          cues: ["job:cron", "status:success"]
 
-📊 Lexicon learns:
+Lexicon learns:
 tok:run → [ci:pipeline (most recent), container:docker, job:cron]
 
 🔍 Query: "run failed"
@@ -900,4 +907,4 @@ Returns:
 
 AGPLv3 - See LICENSE for details
 
-For commercial licensing (closed-source SaaS), contact: licensing@cuemap.dev
+For commercial licensing (closed-source SaaS), contact: hello@cuemap.dev
